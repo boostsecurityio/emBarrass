@@ -1,0 +1,11 @@
+# Binaries and build output
+/embarass
+/embarass.exe
+/dist/
+*.out
+*.test
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/

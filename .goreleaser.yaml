@@ -1,0 +1,92 @@
+version: 2
+project_name: embarass
+
+before:
+  hooks:
+    - go mod verify
+
+builds:
+  - id: embarass
+    main: ./cmd/embarass
+    binary: embarass
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.Version={{.Version}} -X main.Commit={{.Commit}} -X main.Date={{.Date}}
+
+archives:
+  - ids: [embarass]
+    formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+      - THIRD_PARTY_NOTICES.txt
+      - docs/assets/*.png
+      - docs/research/*.md
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+changelog:
+  use: github-native
+  sort: asc
+
+checksum:
+  name_template: checksums.txt
+
+signs:
+  - id: checksums
+    artifacts: checksum
+    cmd: cosign
+    args:
+      - sign-blob
+      - --yes
+      - --bundle=${signature}
+      - ${artifact}
+    signature: ${artifact}.cosign.bundle
+    output: true
+
+release:
+  prerelease: auto
+  header: |
+    ## emBarrass {{ .Version }}
+
+    {{ if eq .Env.PUBLISH_HOMEBREW "true" }}
+    ```sh
+    brew install boostsecurityio/tap/embarass
+    ```
+    {{ end }}
+
+    Putting the “em” in MITM. Wrap any command, test its TLS trust, and find
+    out whether you've been emBarrassed.
+
+# GoReleaser writes this cask as Casks/embarass.rb. It neither regenerates the
+# tap nor touches differently named casks such as Casks/dazio.rb. The source
+# release uses GITHUB_TOKEN; this cross-repository write uses only the app
+# token minted for boostsecurityio/homebrew-tap by release.yml.
+homebrew_casks:
+  - name: embarass
+    repository:
+      owner: boostsecurityio
+      name: homebrew-tap
+      token: '{{ .Env.HOMEBREW_TAP_TOKEN }}'
+    homepage: https://github.com/boostsecurityio/emBarrass
+    description: Test CLI tools for trust in the compromised eMudhra CA key
+    license: GPL-3.0-or-later
+    # GitHub release publishing is independent of the tap. Homebrew is opt-in,
+    # and prereleases remain excluded even when the opt-in is enabled.
+    skip_upload: '{{ if eq .Env.PUBLISH_HOMEBREW "true" }}auto{{ else }}true{{ end }}'
