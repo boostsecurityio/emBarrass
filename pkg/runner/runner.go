@@ -216,7 +216,7 @@ func Run(ctx context.Context, options Options) (Result, error) {
 			if err := stopCommand(command); err != nil {
 				return Result{}, fmt.Errorf("stop child after interceptor failure: %w", err)
 			}
-			<-processDone
+			<-processDone //nolint:errcheck // The interceptor failure takes precedence over the stopped child's exit error.
 			return Result{}, fmt.Errorf("serve local interceptor: %w", serverErr)
 		case <-timeout:
 			state = drainObservations(ctx, state, server.Observations())
@@ -238,7 +238,7 @@ func Run(ctx context.Context, options Options) (Result, error) {
 			if err := stopCommand(command); err != nil {
 				return Result{}, fmt.Errorf("stop canceled child process: %w", err)
 			}
-			<-processDone
+			<-processDone //nolint:errcheck // The cancellation cause takes precedence over the stopped child's exit error.
 			return Result{}, fmt.Errorf("run wrapped command: %w", context.Cause(ctx))
 		}
 	}
