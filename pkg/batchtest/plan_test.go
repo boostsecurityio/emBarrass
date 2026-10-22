@@ -4,13 +4,19 @@
 package batchtest
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/boostsecurityio/emBarrass/pkg/certforge"
+	"github.com/boostsecurityio/emBarrass/pkg/runner"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,7 +45,10 @@ func TestDiscoverBuildsSafeProbesForInstalledTools(t *testing.T) {
 		[]string{"curl", "gh", "go", "pip", "docker", "docker/git", "crane"},
 		probeNames(plan.Probes),
 	)
-	require.Equal(t, []string{"git", "wget", "npm"}, plan.Unavailable)
+	require.Equal(t, []string{
+		"git", "wget", "npm", "aws", "gcloud", "cargo", "uv", "kubectl",
+		"python", "node", "gem", "dotnet", "pnpm", "httpie", "helm", "composer",
+	}, plan.Unavailable)
 	require.Equal(t, workspace, plan.WorkingDirectory())
 
 	ghProbe := plan.Probes[1]
@@ -87,6 +96,124 @@ func TestDiscoverBuildsSafeProbesForInstalledTools(t *testing.T) {
 		filepath.Join(workspace, "crane-docker-config"),
 		craneProbe.EnvironmentOverrides["DOCKER_CONFIG"],
 	)
+}
+
+func TestAdditionalProbesIsolateCredentialsAndWrites(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	installed := []string{"aws", "gcloud", "cargo", "uv", "kubectl"}
+	plan := discover(workspace, func(name string) (string, error) {
+		for _, tool := range installed {
+			if name == tool {
+				return filepath.Join(workspace, "bin", name), nil
+			}
+		}
+		return "", errors.New("not found")
+	})
+	require.Equal(t, installed, probeNames(plan.Probes))
+	for _, probe := range plan.Probes {
+		require.Equal(t, filepath.Join(workspace, "bin", probe.Name), probe.Command()[0])
+		require.Equal(t, probe.Name+" "+strings.Join(probe.Arguments, " "), probe.Preview)
+		require.False(t, probe.Containerized)
+		require.False(t, probe.MayPullImage)
+	}
+
+	aws := plan.Probes[0]
+	require.Contains(t, aws.Arguments, "--no-sign-request")
+	require.Contains(t, aws.Arguments, "head-bucket")
+	require.Contains(t, aws.Arguments, "https://s3.us-east-1.amazonaws.com")
+	require.Equal(t, filepath.Join(workspace, "aws-config"), aws.EnvironmentOverrides["AWS_CONFIG_FILE"])
+	require.Equal(t, os.DevNull, aws.EnvironmentOverrides["AWS_SHARED_CREDENTIALS_FILE"])
+	require.Equal(t, "default", aws.EnvironmentOverrides["AWS_PROFILE"])
+	require.Equal(t, "default", aws.EnvironmentOverrides["AWS_DEFAULT_PROFILE"])
+	require.Equal(t, "true", aws.EnvironmentOverrides["AWS_EC2_METADATA_DISABLED"])
+
+	gcloud := plan.Probes[1]
+	require.Equal(t, "true", gcloud.EnvironmentOverrides["CLOUDSDK_AUTH_DISABLE_CREDENTIALS"])
+	require.Equal(t, filepath.Join(workspace, "gcloud-config"), gcloud.EnvironmentOverrides["CLOUDSDK_CONFIG"])
+	require.Equal(t, "true", gcloud.EnvironmentOverrides["CLOUDSDK_CORE_DISABLE_USAGE_REPORTING"])
+	require.Equal(t, "false", gcloud.EnvironmentOverrides["CLOUDSDK_CORE_CHECK_GCE_METADATA"])
+	require.Equal(t, []string{"components", "list", "--quiet"}, gcloud.Arguments)
+	require.Equal(t, "https://dl.google.com/dl/cloudsdk/channels/rapid/components-2.json", gcloud.EnvironmentOverrides["CLOUDSDK_COMPONENT_MANAGER_SNAPSHOT_URL"])
+
+	cargo := plan.Probes[2]
+	require.Equal(t, filepath.Join(workspace, "cargo"), cargo.EnvironmentOverrides["CARGO_HOME"])
+	require.Equal(t, "sparse", cargo.EnvironmentOverrides["CARGO_REGISTRIES_CRATES_IO_PROTOCOL"])
+	require.Equal(t, []string{"search", "serde", "--limit", "1", "--registry", "crates-io"}, cargo.Arguments)
+
+	uv := plan.Probes[3]
+	for _, flag := range []string{"--no-config", "--no-python-downloads", "--no-build", "--no-deps"} {
+		require.Contains(t, uv.Arguments, flag)
+	}
+	require.Equal(t, filepath.Join(workspace, "uv-cache"), uv.EnvironmentOverrides["UV_CACHE_DIR"])
+	require.Equal(t, os.DevNull, uv.EnvironmentOverrides["NETRC"])
+
+	kubectl := plan.Probes[4]
+	require.Equal(t, []string{
+		"--kubeconfig", os.DevNull, "--server", "https://example.com",
+		"--cache-dir", filepath.Join(workspace, "kubectl-cache"), "get", "--raw=/version",
+	}, kubectl.Arguments)
+}
+
+func TestDiscoverPreparesCloudConfiguration(t *testing.T) {
+	t.Parallel()
+
+	plan, err := Discover()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, plan.Cleanup()) })
+	config, err := os.ReadFile(filepath.Join(plan.WorkingDirectory(), "aws-config"))
+	require.NoError(t, err)
+	require.Equal(t, "[default]\n", string(config))
+	require.DirExists(t, filepath.Join(plan.WorkingDirectory(), "gcloud-config"))
+}
+
+// Opt in to exercise real installed clients through the non-forwarding proxy.
+// Ordinary unit tests do not depend on external CLI installations.
+func TestInstalledAdditionalProbesReachTLS(t *testing.T) {
+	if os.Getenv("EMBARASS_TEST_INSTALLED_TOOLS") != "1" {
+		t.Skip("set EMBARASS_TEST_INSTALLED_TOOLS=1 to test installed clients")
+	}
+	// A configured shell must not require these profiles or credential files.
+	t.Setenv("AWS_PROFILE", "embarass-nonexistent-profile")
+	t.Setenv("AWS_DEFAULT_PROFILE", "embarass-nonexistent-profile")
+	t.Setenv("CLOUDSDK_AUTH_ACCESS_TOKEN_FILE", filepath.Join(t.TempDir(), "missing-token"))
+	t.Setenv("CARGO_REGISTRY_DEFAULT", "embarass-nonexistent-registry")
+	plan, err := Discover()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, plan.Cleanup()) })
+	for _, name := range []string{
+		"aws", "gcloud", "cargo", "uv", "kubectl",
+		"python", "node", "gem", "dotnet", "pnpm", "httpie", "helm", "composer",
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, probe := range plan.Probes {
+				if probe.Name != name {
+					continue
+				}
+				for _, chain := range []certforge.Chain{certforge.ChainEMSign, certforge.ChainSectigo} {
+					t.Run(string(chain), func(t *testing.T) {
+						var stderr bytes.Buffer
+						result, err := runner.Run(context.Background(), runner.Options{
+							Command: probe.Command(), Timeout: 20 * time.Second,
+							Chain:                chain,
+							WorkingDirectory:     plan.WorkingDirectory(),
+							EnvironmentOverrides: probe.EnvironmentOverrides,
+							Stdout:               io.Discard, Stderr: &stderr,
+						})
+						require.NoError(t, err)
+						require.Contains(t, []runner.Outcome{runner.OutcomeRejected, runner.OutcomeVulnerable}, result.Outcome, "%+v\n%s", result, stderr.String())
+						if host, ok := everydayProbeHosts[name]; ok {
+							require.Equal(t, host, result.Host)
+						}
+						t.Logf("%s/%s: %s (%s)", name, chain, result.Outcome, result.Host)
+					})
+				}
+				return
+			}
+			t.Skip("executable not installed")
+		})
+	}
 }
 
 func TestDockerGitArgumentsUsePortableHostBridge(t *testing.T) {
