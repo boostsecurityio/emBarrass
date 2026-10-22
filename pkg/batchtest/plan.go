@@ -330,6 +330,7 @@ func supportedTools() []toolDefinition {
 						"CARGO_HOME":                          filepath.Join(workspace, "cargo"),
 						"CARGO_REGISTRIES_CRATES_IO_PROTOCOL": "sparse",
 						"CARGO_NET_RETRY":                     "0",
+						"RUSTUP_AUTO_INSTALL":                 "0",
 					},
 				}
 			},

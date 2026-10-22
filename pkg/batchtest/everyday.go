@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -125,6 +126,7 @@ func everydayTools() []toolDefinition {
 						"XDG_CONFIG_HOME":                 filepath.Join(workspace, "pnpm-xdg-config"),
 						"XDG_DATA_HOME":                   filepath.Join(workspace, "pnpm-xdg-data"),
 						"XDG_STATE_HOME":                  filepath.Join(workspace, "pnpm-xdg-state"),
+						"COREPACK_HOME":                   corepackHome(workspace),
 						"COREPACK_ENABLE_NETWORK":         "0",
 						"COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
 					},
@@ -190,4 +192,29 @@ func everydayTools() []toolDefinition {
 			},
 		},
 	}
+}
+
+// Resolve Corepack's executable cache before XDG_CACHE_HOME is isolated. This
+// follows nodejs/corepack's sources/folderUtils.ts, including its Windows
+// fallback. Package-manager downloads remain disabled for the probe.
+func corepackHome(workspace string) string {
+	if home, ok := os.LookupEnv("COREPACK_HOME"); ok {
+		return home
+	}
+	for _, key := range []string{"XDG_CACHE_HOME", "LOCALAPPDATA"} {
+		if cache, ok := os.LookupEnv(key); ok {
+			return filepath.Join(cache, "node", "corepack")
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		// Without a home, leave Corepack an empty isolated cache. It will
+		// fail without bootstrapping instead of guessing a user's cache.
+		return filepath.Join(workspace, "corepack")
+	}
+	cache := ".cache"
+	if runtime.GOOS == "windows" {
+		cache = filepath.Join("AppData", "Local")
+	}
+	return filepath.Join(home, cache, "node", "corepack")
 }

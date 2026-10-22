@@ -193,14 +193,14 @@ The additional probes work without logging in or installing packages:
 |---|---|---|
 | AWS CLI (`aws`) | Unsigned `s3api head-bucket` for the public `noaa-goes16` bucket | Temporary default profile, no shared credential file, metadata lookup disabled |
 | `gcloud` | `components list` fetches Google's public component catalog | Temporary configuration, credential loading and usage reporting disabled |
-| `cargo` | `search serde --limit 1 --registry crates-io` | Temporary Cargo home and sparse registry access |
+| `cargo` | `search serde --limit 1 --registry crates-io` | Temporary Cargo home and sparse registry access; rustup toolchain downloads disabled |
 | `uv` | Fetch a public Requests requirements file with `pip compile` | Temporary cache, no configuration discovery, builds, Python downloads, or keyring access |
 | `kubectl` | `get --raw=/version` against `https://example.com` | Empty kubeconfig and temporary cache; no cluster credentials or credential plugins |
 | Python | Standard-library `urllib.request` against `https://example.com/` | Isolated Python mode; no third-party packages required |
 | Node.js | A TLS `HEAD` request to `https://example.com/` | Embedded probe script uses the local proxy and Node's default certificate verification |
 | RubyGems (`gem`) | Remote search for `rake` on RubyGems.org | No gemrc configuration; temporary gem home, search path, and cache |
 | .NET (`dotnet`) | Search for `Newtonsoft.Json` on NuGet.org | Temporary CLI home and NuGet configuration/cache; telemetry and first-run development certificate generation disabled |
-| `pnpm` | Query `is-number` metadata on npmjs.org | Isolated npm configuration and caches; Corepack downloads disabled |
+| `pnpm` | Query `is-number` metadata on npmjs.org | Isolated npm configuration and caches; existing Corepack executable cache preserved and bootstrap downloads disabled |
 | HTTPie | `HEAD https://example.com/` | Temporary configuration; stdin and netrc credentials ignored |
 | `helm` | Show the public `hello-world` chart metadata | Temporary configuration, cache, and plugin paths; empty kubeconfig |
 | `composer` | Show public `symfony/console` metadata | Temporary project/configuration; plugins, scripts, cache, and interaction disabled |

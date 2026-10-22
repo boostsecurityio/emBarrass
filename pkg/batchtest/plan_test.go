@@ -140,6 +140,7 @@ func TestAdditionalProbesIsolateCredentialsAndWrites(t *testing.T) {
 	cargo := plan.Probes[2]
 	require.Equal(t, filepath.Join(workspace, "cargo"), cargo.EnvironmentOverrides["CARGO_HOME"])
 	require.Equal(t, "sparse", cargo.EnvironmentOverrides["CARGO_REGISTRIES_CRATES_IO_PROTOCOL"])
+	require.Equal(t, "0", cargo.EnvironmentOverrides["RUSTUP_AUTO_INSTALL"])
 	require.Equal(t, []string{"search", "serde", "--limit", "1", "--registry", "crates-io"}, cargo.Arguments)
 
 	uv := plan.Probes[3]
