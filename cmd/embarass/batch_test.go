@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/boostsecurityio/emBarrass/pkg/batchtest"
-	"github.com/boostsecurityio/emBarrass/pkg/certforge"
 	"github.com/boostsecurityio/emBarrass/pkg/runner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/require"
@@ -50,7 +49,6 @@ func TestBatchModelPreviewsThenRunsConfirmedProbe(t *testing.T) {
 		ui.styles,
 		plan,
 		run,
-		certforge.ChainSectigo,
 		30*time.Second,
 		false,
 	)
@@ -91,7 +89,6 @@ func TestBatchModelDefaultsToCancel(t *testing.T) {
 			t.Fatal("probe must not run before confirmation")
 			return runner.Result{}, errors.New("unreachable")
 		},
-		certforge.ChainSectigo,
 		30*time.Second,
 		false,
 	)
@@ -121,12 +118,11 @@ func TestBatchRunnerOptionsIsolateWritesAndDiscardOutput(t *testing.T) {
 			"GOCACHE": filepath.Join(workspace, "go-build"),
 		},
 	}
-	options := batchRunnerOptions(plan, probe, certforge.ChainEMSign, 5*time.Second)
+	options := batchRunnerOptions(plan, probe, 5*time.Second)
 
 	require.Equal(t, probe.Command(), options.Command)
 	require.Equal(t, probe.EnvironmentOverrides, options.EnvironmentOverrides)
 	require.Equal(t, plan.WorkingDirectory(), options.WorkingDirectory)
-	require.Equal(t, certforge.ChainEMSign, options.Chain)
 	require.Equal(t, 5*time.Second, options.Timeout)
 	require.Equal(t, runner.ProxyTargetDockerContainer, options.ProxyTarget)
 }
@@ -137,7 +133,6 @@ func TestBatchRunnerOptionsDefaultToHostProxy(t *testing.T) {
 	options := batchRunnerOptions(
 		batchtest.Plan{},
 		batchtest.Probe{Name: "curl", Executable: "/usr/bin/curl"},
-		certforge.ChainSectigo,
 		time.Second,
 	)
 

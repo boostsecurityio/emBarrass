@@ -175,6 +175,36 @@ func TestRootCommandRejectsInvalidChain(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported chain")
 }
 
+func TestRootCommandDefaultReportsVulnerableWhenOnlyOnePathIsAccepted(t *testing.T) {
+	t.Parallel()
+
+	// A Mozilla-derived store trusts AAA Certificate Services for e-mail only,
+	// so the client rejects the Sectigo path but accepts the emSign path.
+	var ran []certforge.Chain
+	app := &application{
+		exitCode: exitInconclusive,
+		run: func(_ context.Context, options runner.Options) (runner.Result, error) {
+			ran = append(ran, options.Chain)
+			if options.Chain == certforge.ChainEMSign {
+				return runner.Result{Outcome: runner.OutcomeVulnerable, Host: "example.com"}, nil
+			}
+			return runner.Result{Outcome: runner.OutcomeRejected, Host: "example.com"}, nil
+		},
+	}
+	command := newRootCommand(app)
+	output := &bytes.Buffer{}
+	command.SetOut(output)
+	command.SetErr(output)
+	command.SetArgs([]string{"curl", "https://example.com/"})
+
+	require.NoError(t, command.Execute())
+	require.Equal(t, exitVulnerable, app.exitCode)
+	require.Contains(t, output.String(), "COMPLETELY EMBARRASSED")
+	require.Contains(t, output.String(), "emsign (direct eMudhra chain)")
+	require.Contains(t, output.String(), "PATH  emsign (direct eMudhra chain)")
+	require.Equal(t, []certforge.Chain{certforge.ChainEMSign}, ran)
+}
+
 func TestRootCommandHelpIncludesSupportedToolExamples(t *testing.T) {
 	t.Parallel()
 

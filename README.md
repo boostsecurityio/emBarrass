@@ -80,7 +80,7 @@ embarass pip index versions pip --index-url=https://pypi.org/simple --no-cache-d
 embarass docker manifest inspect docker.io/library/alpine:latest
 embarass crane manifest registry.k8s.io/pause:3.10
 
-# Test the direct eMudhra trust path instead of the default Sectigo path
+# Test one trust path for fewer runs with narrower coverage
 embarass --chain emsign -- curl https://example.com/
 
 # Allow a command to run without the default 30-second deadline
@@ -94,7 +94,9 @@ embarass --headless -- curl https://example.com/
 embarass batch
 ```
 
-The default test uses the weak `emSign DV TLS CA - G3B` key in its cross-certificate issued by `AAA Certificate Services`. Run a second, explicit test with `--chain emsign` to exercise the direct eMudhra path. `emBarrass` never runs a command twice automatically because the command may have side effects.
+By default (`--chain all`), the command tests both trust paths for the weak `emSign DV TLS CA - G3B` key: first the direct eMudhra path to `emSign ECC Root CA - G3`, then the cross-certificate issued by `AAA Certificate Services`. Testing stops with a **vulnerable** result as soon as any path is accepted. The result is **rejected** only if every path is rejected; otherwise it is **inconclusive**.
+
+Testing one path can miss a vulnerable client. Mozilla-derived trust stores trust `AAA Certificate Services` for e-mail only, so a client can reject the Sectigo path but accept the direct path. If both paths run, the command's side effects happen twice. Use `--chain emsign` or `--chain sectigo` to test one path. `--timeout` applies per path.
 
 The default output is an interactive, human-readable terminal report with distinct vulnerable, rejected, inconclusive, and harness-error panels. Use `--headless` to retain the compact one-line log format for automation and captured logs. Both modes use the same exit codes.
 
@@ -114,9 +116,9 @@ current image:
 cgr.dev/chainguard/git@sha256:06119871a608d163eac2daddd0745582e457a29ee8402bd351c13f294ede30e1
 ```
 
-Use `embarass batch --chain emsign` to exercise the vulnerable direct eMudhra
-trust path in this historical fixture. The default `sectigo` run tests the
-separate cross-signed path, which this image's CA bundle need not trust.
+By default, `batch` tests both trust paths per probe unless the first is accepted.
+The historical `docker/git` fixture is vulnerable through the direct eMudhra
+path; its CA bundle need not trust the cross-signed path.
 
 Before anything runs, the terminal UI shows the exact read-only command
 selected for each installed tool and marks missing tools as skipped. The prompt
@@ -150,7 +152,7 @@ For automation, make consent explicit and select compact output:
 
 ```console
 embarass batch --yes --headless
-embarass batch --yes --headless --chain emsign
+embarass batch --yes --headless --chain emsign  # one trust path per probe
 ```
 
 The batch exits `1` if any tool is vulnerable, `2` if none are vulnerable but
@@ -168,10 +170,10 @@ Git can use `url.*.insteadOf` configuration to silently rewrite an explicit HTTP
 | Exit | Result | Meaning |
 |---:|---|---|
 | `1` | **Vulnerable** | The child accepted the forged chain and sent application data. `emBarrass` immediately terminated the child. |
-| `0` | **Not confirmed / rejected** | The child reached `emBarrass` but rejected or otherwise failed the forged TLS handshake. |
+| `0` | **Not confirmed / rejected** | On every tested trust path, the child reached `emBarrass` but rejected or otherwise failed the forged TLS handshake. |
 | `2` | **Inconclusive or harness error** | No HTTPS proxy traffic was observed, no TLS decision was reached, the deadline expired, or the harness failed. |
 
-A zero exit is evidence about the tested executable, machine, trust state, and selected chain—not a permanent verdict about a product family. Use both trust paths for broader coverage.
+A zero exit is evidence about the tested executable, machine, trust state, and trust paths—not a permanent verdict about a product family.
 
 ## How it works
 

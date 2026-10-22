@@ -100,11 +100,11 @@ func isTerminal(output io.Writer) bool {
 
 func (ui terminalUI) start(
 	command []string,
-	chain certforge.Chain,
+	chains []certforge.Chain,
 	timeout time.Duration,
 	adjustments []runner.CommandAdjustment,
 ) error {
-	model := newCeremonyModel(ui.styles, command, chain, timeout, adjustments)
+	model := newCeremonyModel(ui.styles, command, chains, timeout, adjustments)
 	if ui.interactive {
 		program := tea.NewProgram(
 			model,
@@ -131,15 +131,15 @@ func (ui terminalUI) start(
 	return nil
 }
 
-func (ui terminalUI) result(result runner.Result, chain certforge.Chain, exitCode int) error {
+func (ui terminalUI) result(result runner.Result, chains []certforge.Chain, exitCode int) error {
 	var rendered string
 	switch result.Outcome {
 	case runner.OutcomeVulnerable:
-		rendered = ui.vulnerableResult(result, chain, exitCode)
+		rendered = ui.vulnerableResult(result, chains, exitCode)
 	case runner.OutcomeRejected:
-		rendered = ui.rejectedResult(result, chain, exitCode)
+		rendered = ui.rejectedResult(result, chains, exitCode)
 	case runner.OutcomeInconclusive:
-		rendered = ui.inconclusiveResult(result, chain, exitCode)
+		rendered = ui.inconclusiveResult(result, chains, exitCode)
 	default:
 		return fmt.Errorf("render unknown runner outcome %q", result.Outcome)
 	}
@@ -150,9 +150,15 @@ func (ui terminalUI) result(result runner.Result, chain certforge.Chain, exitCod
 	return nil
 }
 
+// pathHeader marks where one trust path's child output starts. A failed write
+// is not fatal here; the result write that follows reports it.
+func (ui terminalUI) pathHeader(chain certforge.Chain) {
+	_, _ = fmt.Fprintln(ui.output, "  "+ui.styles.cyanBold.Render("PATH")+"  "+ui.styles.muted.Render(chainDescription(chain)))
+}
+
 func (ui terminalUI) vulnerableResult(
 	result runner.Result,
-	chain certforge.Chain,
+	chains []certforge.Chain,
 	exitCode int,
 ) string {
 	lines := make([]string, 0, 9)
@@ -164,13 +170,13 @@ func (ui terminalUI) vulnerableResult(
 		ui.detail(ui.styles.redBold, "CAUSE", "eMudhra signing key had just 255 possible values"),
 		"",
 	)
-	lines = append(lines, ui.resultMetadata(result, chain, exitCode)...)
+	lines = append(lines, ui.resultMetadata(result, chains, exitCode)...)
 	return strings.Join(lines, "\n")
 }
 
 func (ui terminalUI) rejectedResult(
 	result runner.Result,
-	chain certforge.Chain,
+	chains []certforge.Chain,
 	exitCode int,
 ) string {
 	lines := make([]string, 0, 7)
@@ -180,13 +186,13 @@ func (ui terminalUI) rejectedResult(
 		"     The command reached the interceptor and rejected the forgery.",
 		"",
 	)
-	lines = append(lines, ui.resultMetadata(result, chain, exitCode)...)
+	lines = append(lines, ui.resultMetadata(result, chains, exitCode)...)
 	return strings.Join(lines, "\n")
 }
 
 func (ui terminalUI) inconclusiveResult(
 	result runner.Result,
-	chain certforge.Chain,
+	chains []certforge.Chain,
 	exitCode int,
 ) string {
 	lines := []string{
@@ -203,13 +209,13 @@ func (ui terminalUI) inconclusiveResult(
 		))
 	}
 	lines = append(lines, "")
-	lines = append(lines, ui.resultMetadata(result, chain, exitCode)...)
+	lines = append(lines, ui.resultMetadata(result, chains, exitCode)...)
 	return strings.Join(lines, "\n")
 }
 
 func (ui terminalUI) resultMetadata(
 	result runner.Result,
-	chain certforge.Chain,
+	chains []certforge.Chain,
 	exitCode int,
 ) []string {
 	lines := make([]string, 0, 3)
@@ -217,7 +223,7 @@ func (ui terminalUI) resultMetadata(
 		lines = append(lines, ui.detail(ui.styles.cyanBold, "HOST", result.Host))
 	}
 	lines = append(lines,
-		ui.detail(ui.styles.cyanBold, "CHAIN", chainDescription(chain)),
+		ui.detail(ui.styles.cyanBold, "CHAIN", chainsDescription(chains)),
 		ui.detail(
 			ui.styles.bold,
 			"EXIT",
@@ -300,7 +306,7 @@ type ceremonyTickMsg struct{}
 type ceremonyModel struct {
 	styles      terminalStyles
 	command     string
-	chain       certforge.Chain
+	chains      []certforge.Chain
 	timeout     time.Duration
 	adjustments []runner.CommandAdjustment
 	stage       int
@@ -310,7 +316,7 @@ type ceremonyModel struct {
 func newCeremonyModel(
 	styles terminalStyles,
 	command []string,
-	chain certforge.Chain,
+	chains []certforge.Chain,
 	timeout time.Duration,
 	adjustments []runner.CommandAdjustment,
 ) ceremonyModel {
@@ -321,7 +327,7 @@ func newCeremonyModel(
 	return ceremonyModel{
 		styles:      styles,
 		command:     truncate(commandName, 16),
-		chain:       chain,
+		chains:      chains,
 		timeout:     timeout,
 		adjustments: adjustments,
 		width:       80,
@@ -370,8 +376,8 @@ func (model ceremonyModel) View() string {
 		"",
 		"  " + model.styles.cyanBold.Render("COMMAND") + "  " + model.command +
 			model.styles.muted.Render(" · arguments hidden"),
-		"  " + model.styles.cyanBold.Render("CHAIN") + "    " + chainShortDescription(model.chain) +
-			"   " + model.styles.cyanBold.Render("LIMIT") + "  " + timeoutDescription(model.timeout),
+		"  " + model.styles.cyanBold.Render("CHAIN") + "    " + chainsShortDescription(model.chains) +
+			"   " + model.styles.cyanBold.Render("LIMIT") + "  " + timeoutDescription(model.timeout, len(model.chains)),
 		"  " + model.styles.cyanBold.Render("MODE") + "     local-only · upstream severed",
 		"",
 		"                 " + model.styles.cyan.Render("CONNECT") + "             " +
@@ -436,9 +442,12 @@ func (model ceremonyModel) progressLine() string {
 		"\n     Waiting for one application byte—the client’s confession."
 }
 
-func timeoutDescription(timeout time.Duration) string {
+func timeoutDescription(timeout time.Duration, paths int) string {
 	if timeout == 0 {
 		return "disabled"
+	}
+	if paths > 1 {
+		return timeout.String() + " per path"
 	}
 	return timeout.String()
 }
@@ -452,6 +461,14 @@ func chainShortDescription(chain certforge.Chain) string {
 	default:
 		return string(chain)
 	}
+}
+
+func chainsShortDescription(chains []certforge.Chain) string {
+	descriptions := make([]string, 0, len(chains))
+	for _, chain := range chains {
+		descriptions = append(descriptions, chainShortDescription(chain))
+	}
+	return strings.Join(descriptions, " + ")
 }
 
 func truncate(value string, maximum int) string {
@@ -474,6 +491,13 @@ func chainDescription(chain certforge.Chain) string {
 	default:
 		return string(chain)
 	}
+}
+
+func chainsDescription(chains []certforge.Chain) string {
+	if len(chains) == 1 {
+		return chainDescription(chains[0])
+	}
+	return chainNames(chains, " + ") + " (every tested trust path)"
 }
 
 func inconclusiveDescription(reason runner.Reason) string {
