@@ -112,8 +112,8 @@ forward intercepted traffic, or change the host trust store.`,
 		},
 	}
 	command.Flags().SetInterspersed(false)
-	command.Flags().DurationVar(&app.timeout, "timeout", defaultTimeout, "maximum runtime; 0 disables the deadline")
-	command.Flags().StringVar(&app.chain, "chain", string(certforge.ChainSectigo), "trust path to test: sectigo or emsign")
+	command.Flags().DurationVar(&app.timeout, "timeout", defaultTimeout, "maximum runtime per trust path; 0 disables the deadline")
+	command.Flags().StringVar(&app.chain, "chain", chainAll, chainFlagUsage)
 	command.Flags().BoolVar(&app.headless, "headless", false, "emit compact log lines without the terminal UI")
 	command.Flags().BoolVarP(&app.verbose, "verbose", "v", false, "enable debug logging")
 	command.AddCommand(newBatchCommand(app), newVersionCommand())
@@ -148,14 +148,14 @@ func (app *application) runCheck(cmd *cobra.Command, args []string) error {
 	if app.timeout < 0 {
 		return fmt.Errorf("timeout must not be negative: %s", app.timeout)
 	}
-	chain, err := parseChain(app.chain)
+	chains, err := parseChains(app.chain)
 	if err != nil {
 		return err
 	}
 	preparedCommand, adjustments := runner.PrepareCommand(args)
 	ui := newTerminalUI(cmd.ErrOrStderr())
 	if !app.headless {
-		if err := ui.start(args, chain, app.timeout, adjustments); err != nil {
+		if err := ui.start(args, chains, app.timeout, adjustments); err != nil {
 			return err
 		}
 		app.terminalStarted = true
@@ -163,13 +163,22 @@ func (app *application) runCheck(cmd *cobra.Command, args []string) error {
 		logHeadlessAdjustments(zerolog.Ctx(cmd.Context()), adjustments)
 	}
 
-	result, err := app.run(cmd.Context(), runner.Options{
+	var beforePath func(certforge.Chain)
+	if len(chains) > 1 {
+		beforePath = func(chain certforge.Chain) {
+			if app.headless {
+				zerolog.Ctx(cmd.Context()).Info().Str("chain", string(chain)).Msg("Testing trust path")
+				return
+			}
+			ui.pathHeader(chain)
+		}
+	}
+	result, reportedChains, err := runChains(cmd.Context(), app.run, runner.Options{
 		Command: preparedCommand,
 		Timeout: app.timeout,
 		Stdout:  cmd.OutOrStdout(),
 		Stderr:  cmd.ErrOrStderr(),
-		Chain:   chain,
-	})
+	}, chains, beforePath)
 	if err != nil {
 		return err
 	}
@@ -185,9 +194,9 @@ func (app *application) runCheck(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("unknown runner outcome %q", result.Outcome)
 	}
 	if !app.headless {
-		return ui.result(result, chain, app.exitCode)
+		return ui.result(result, reportedChains, app.exitCode)
 	}
-	logHeadlessResult(zerolog.Ctx(cmd.Context()), result, chain)
+	logHeadlessResult(zerolog.Ctx(cmd.Context()), result, reportedChains)
 	return nil
 }
 
@@ -204,31 +213,24 @@ func logHeadlessAdjustments(log *zerolog.Logger, adjustments []runner.CommandAdj
 	}
 }
 
-func parseChain(value string) (certforge.Chain, error) {
-	chain := certforge.Chain(strings.ToLower(value))
-	if chain != certforge.ChainSectigo && chain != certforge.ChainEMSign {
-		return "", fmt.Errorf("unsupported chain %q: use sectigo or emsign", value)
-	}
-	return chain, nil
-}
-
-func logHeadlessResult(log *zerolog.Logger, result runner.Result, chain certforge.Chain) {
+func logHeadlessResult(log *zerolog.Logger, result runner.Result, chains []certforge.Chain) {
 	switch result.Outcome {
 	case runner.OutcomeVulnerable:
 		log.Error().
 			Str("host", result.Host).
-			Str("chain", string(chain)).
+			Str("chain", chainNames(chains, ",")).
 			Dur("duration", result.Duration).
 			Msg("VULNERABLE: the command accepted a forged certificate signed by the compromised eMudhra key")
 	case runner.OutcomeRejected:
 		log.Info().
 			Str("host", result.Host).
-			Str("chain", string(chain)).
+			Str("chain", chainNames(chains, ",")).
 			Dur("duration", result.Duration).
 			Msg("NOT CONFIRMED: the command reached emBarrass but rejected the forged TLS connection")
 	case runner.OutcomeInconclusive:
 		log.Warn().
 			Str("reason", string(result.Reason)).
+			Str("chain", chainNames(chains, ",")).
 			Int("child_exit_code", result.ChildExitCode).
 			Dur("duration", result.Duration).
 			Msg("INCONCLUSIVE: emBarrass could not confirm whether the command is vulnerable")

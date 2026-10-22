@@ -40,8 +40,8 @@ immutable, digest-pinned image.`,
 		},
 	}
 	command.Flags().BoolVarP(&app.batchYes, "yes", "y", false, "run the displayed probes without prompting")
-	command.Flags().DurationVar(&app.timeout, "timeout", defaultTimeout, "maximum runtime per tool; 0 disables the deadline")
-	command.Flags().StringVar(&app.chain, "chain", string(certforge.ChainSectigo), "trust path to test: sectigo or emsign")
+	command.Flags().DurationVar(&app.timeout, "timeout", defaultTimeout, "maximum runtime per tool and trust path; 0 disables the deadline")
+	command.Flags().StringVar(&app.chain, "chain", chainAll, chainFlagUsage)
 	command.Flags().BoolVar(&app.headless, "headless", false, "emit compact log lines without the terminal UI")
 	command.Flags().BoolVarP(&app.verbose, "verbose", "v", false, "enable debug logging")
 	return command
@@ -51,7 +51,7 @@ func (app *application) runBatch(cmd *cobra.Command) error {
 	if app.timeout < 0 {
 		return fmt.Errorf("timeout must not be negative: %s", app.timeout)
 	}
-	chain, err := parseChain(app.chain)
+	chains, err := parseChains(app.chain)
 	if err != nil {
 		return err
 	}
@@ -79,9 +79,9 @@ func (app *application) runBatch(cmd *cobra.Command) error {
 
 	var summary batchSummary
 	if app.headless || !interactive {
-		summary = app.runBatchHeadless(cmd.Context(), plan, chain)
+		summary = app.runBatchHeadless(cmd.Context(), plan, chains)
 	} else {
-		summary, err = app.runBatchTerminal(cmd, plan, chain)
+		summary, err = app.runBatchTerminal(cmd, plan, chains)
 	}
 	cleanupErr := plan.Cleanup()
 	if err != nil || cleanupErr != nil {
@@ -94,7 +94,7 @@ func (app *application) runBatch(cmd *cobra.Command) error {
 func (app *application) runBatchTerminal(
 	cmd *cobra.Command,
 	plan batchtest.Plan,
-	chain certforge.Chain,
+	chains []certforge.Chain,
 ) (batchSummary, error) {
 	ctx, cancel := context.WithCancel(cmd.Context())
 	defer cancel()
@@ -104,8 +104,7 @@ func (app *application) runBatchTerminal(
 		cancel,
 		newTerminalUI(cmd.ErrOrStderr()).styles,
 		plan,
-		app.run,
-		chain,
+		acrossChains(app.run, chains),
 		app.timeout,
 		app.batchYes,
 	)
@@ -129,7 +128,7 @@ func (app *application) runBatchTerminal(
 func (app *application) runBatchHeadless(
 	ctx context.Context,
 	plan batchtest.Plan,
-	chain certforge.Chain,
+	chains []certforge.Chain,
 ) batchSummary {
 	log := zerolog.Ctx(ctx)
 	available := make([]string, 0, len(plan.Probes))
@@ -147,9 +146,9 @@ func (app *application) runBatchHeadless(
 	summary := batchSummary{skipped: len(plan.Unavailable)}
 	for _, probe := range plan.Probes {
 		log.Info().Str("tool", probe.Name).Str("command", probe.Preview).Msg("testing TLS trust")
-		result, err := app.run(ctx, batchRunnerOptions(plan, probe, chain, app.timeout))
+		result, reportedChains, err := runChains(ctx, app.run, batchRunnerOptions(plan, probe, app.timeout), chains, nil)
 		summary.record(result, err)
-		logBatchResult(log, probe.Name, result, err)
+		logBatchResult(log, probe.Name, result, reportedChains, err)
 	}
 	log.Info().
 		Int("embarrassed", summary.vulnerable).
@@ -173,7 +172,6 @@ func planMayPullImage(plan batchtest.Plan) bool {
 func batchRunnerOptions(
 	plan batchtest.Plan,
 	probe batchtest.Probe,
-	chain certforge.Chain,
 	timeout time.Duration,
 ) runner.Options {
 	proxyTarget := runner.ProxyTargetHost
@@ -185,22 +183,22 @@ func batchRunnerOptions(
 		Timeout:              timeout,
 		Stdout:               io.Discard,
 		Stderr:               io.Discard,
-		Chain:                chain,
 		WorkingDirectory:     plan.WorkingDirectory(),
 		EnvironmentOverrides: probe.EnvironmentOverrides,
 		ProxyTarget:          proxyTarget,
 	}
 }
 
-func logBatchResult(log *zerolog.Logger, tool string, result runner.Result, err error) {
+func logBatchResult(log *zerolog.Logger, tool string, result runner.Result, chains []certforge.Chain, err error) {
 	if err != nil {
 		log.Error().Err(err).Str("tool", tool).Msg("HARNESS ERROR")
 		return
 	}
-	event := log.Info().Str("tool", tool).Str("host", result.Host).Dur("duration", result.Duration)
+	chain := chainNames(chains, ",")
+	event := log.Info().Str("tool", tool).Str("host", result.Host).Str("chain", chain).Dur("duration", result.Duration)
 	switch result.Outcome {
 	case runner.OutcomeVulnerable:
-		event = log.Error().Str("tool", tool).Str("host", result.Host).Dur("duration", result.Duration)
+		event = log.Error().Str("tool", tool).Str("host", result.Host).Str("chain", chain).Dur("duration", result.Duration)
 		event.Msg("COMPLETELY EMBARRASSED: forged certificate accepted")
 	case runner.OutcomeRejected:
 		event.Msg("TRUST HELD: forged certificate rejected")
@@ -208,6 +206,7 @@ func logBatchResult(log *zerolog.Logger, tool string, result runner.Result, err 
 		log.Warn().
 			Str("tool", tool).
 			Str("reason", string(result.Reason)).
+			Str("chain", chain).
 			Dur("duration", result.Duration).
 			Msg("NO SIGNAL: result inconclusive")
 	}

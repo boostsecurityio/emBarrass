@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/boostsecurityio/emBarrass/pkg/batchtest"
-	"github.com/boostsecurityio/emBarrass/pkg/certforge"
 	"github.com/boostsecurityio/emBarrass/pkg/runner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -46,7 +45,6 @@ type batchModel struct {
 	styles    terminalStyles
 	plan      batchtest.Plan
 	run       runFunc
-	chain     certforge.Chain
 	timeout   time.Duration
 	items     []batchItem
 	current   int
@@ -72,7 +70,6 @@ func newBatchModel(
 	styles terminalStyles,
 	plan batchtest.Plan,
 	run runFunc,
-	chain certforge.Chain,
 	timeout time.Duration,
 	autoStart bool,
 ) batchModel {
@@ -86,7 +83,6 @@ func newBatchModel(
 		styles:    styles,
 		plan:      plan,
 		run:       run,
-		chain:     chain,
 		timeout:   timeout,
 		items:     items,
 		width:     80,
@@ -171,7 +167,7 @@ func (model batchModel) runCurrent() tea.Cmd {
 	return func() tea.Msg {
 		result, err := model.run(
 			model.ctx,
-			batchRunnerOptions(model.plan, probe, model.chain, model.timeout),
+			batchRunnerOptions(model.plan, probe, model.timeout),
 		)
 		return batchResultMsg{index: index, result: result, err: err}
 	}

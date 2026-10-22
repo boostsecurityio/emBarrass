@@ -53,7 +53,7 @@ func TestTerminalUIResultStates(t *testing.T) {
 
 			output := &bytes.Buffer{}
 			ui := newTerminalUI(output)
-			require.NoError(t, ui.result(testCase.result, certforge.ChainSectigo, testCase.exitCode))
+			require.NoError(t, ui.result(testCase.result, []certforge.Chain{certforge.ChainSectigo}, testCase.exitCode))
 			require.Contains(t, output.String(), testCase.want)
 			require.Contains(t, output.String(), "EXIT")
 			require.NotContains(t, output.String(), "\x1b[")
@@ -68,7 +68,7 @@ func TestTerminalUIStartRendersCeremonyWithoutArguments(t *testing.T) {
 	ui := newTerminalUI(output)
 	require.NoError(t, ui.start(
 		[]string{"curl", "https://user:do-not-print@example.com/"},
-		certforge.ChainSectigo,
+		allChains,
 		30*time.Second,
 		nil,
 	))
@@ -82,6 +82,8 @@ func TestTerminalUIStartRendersCeremonyWithoutArguments(t *testing.T) {
 	require.Contains(t, rendered, "P-384: STILL SECURE")
 	require.Contains(t, rendered, "KEYGEN: GOLD STAR FOR TRYING")
 	require.Contains(t, rendered, "COMMAND  curl · arguments hidden")
+	require.Contains(t, rendered, "CHAIN    direct eMudhra + Sectigo / AAA")
+	require.Contains(t, rendered, "LIMIT  30s per path")
 	require.Contains(t, rendered, "CHILD OUTPUT")
 	require.NotContains(t, rendered, "do-not-print")
 }
@@ -93,7 +95,7 @@ func TestTerminalUIStartDisclosesGHCredentialIsolation(t *testing.T) {
 	ui := newTerminalUI(output)
 	require.NoError(t, ui.start(
 		[]string{"gh", "api", "meta", "--silent"},
-		certforge.ChainSectigo,
+		[]certforge.Chain{certforge.ChainSectigo},
 		30*time.Second,
 		[]runner.CommandAdjustment{runner.AdjustmentGHCredentialsIsolated},
 	))
@@ -109,7 +111,7 @@ func TestCeremonyModelUsesCompactBrandOnNarrowTerminals(t *testing.T) {
 	model := newCeremonyModel(
 		ui.styles,
 		[]string{"curl"},
-		certforge.ChainSectigo,
+		[]certforge.Chain{certforge.ChainSectigo},
 		30*time.Second,
 		nil,
 	)

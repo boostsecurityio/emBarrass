@@ -99,6 +99,8 @@ At startup:
 
 Test the eMudhra-direct and Sectigo-cross-signed variants separately. A TLS Certificate message should not be treated as a bag containing arbitrary alternative paths; path construction differs between stores and verifiers. A `--chain=emsign|sectigo` option is predictable. Automatically executing an arbitrary user command twice is unsafe because commands can have side effects, so the default should perform one documented chain test and ask for an explicit second run for the alternative.
 
+> **Superseded:** the default is now `--chain all`, which runs the command once per path (stopping early once one is accepted). A single-path default reported clients as protected when their store anchored only the other path; for example, Mozilla-derived stores trust `AAA Certificate Services` for e-mail only, so the Sectigo path alone misses clients that accept the direct path. `--chain emsign|sectigo` still limits a run to one path, so the command's side effects happen once.
+
 ### Proof and outcome states
 
 TCP connection or `CONNECT` receipt does not demonstrate vulnerability. Even completion of the TLS handshake can precede an application's custom pinning or post-handshake policy. The strongest generic proof is that, after receiving the forged chain, the target sends an HTTP request (or other authenticated application bytes) over that TLS session.
