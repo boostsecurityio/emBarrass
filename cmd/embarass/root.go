@@ -73,8 +73,11 @@ func Execute() int {
 func newRootCommand(app *application) *cobra.Command {
 	invocation := app.displayedInvocation()
 	command := &cobra.Command{
-		Use:   invocation + " [flags] -- command [args...]",
+		Use:   "embarass [flags] -- command [args...]",
 		Short: "Wrap any command and test its TLS trust",
+		// Keep shell function names independent of argv[0], while preserving
+		// the copyable invocation in help (for example, ./embarass).
+		Annotations: map[string]string{cobra.CommandDisplayNameAnnotation: invocation},
 		Long: tagline + `
 
 emBarrass routes one command through an authenticated local HTTPS interceptor.
@@ -114,6 +117,7 @@ forward intercepted traffic, or change the host trust store.`,
 	command.Flags().SetInterspersed(false)
 	command.Flags().DurationVar(&app.timeout, "timeout", defaultTimeout, "maximum runtime per trust path; 0 disables the deadline")
 	command.Flags().StringVar(&app.chain, "chain", chainAll, chainFlagUsage)
+	registerChainCompletion(command)
 	command.Flags().BoolVar(&app.headless, "headless", false, "emit compact log lines without the terminal UI")
 	command.Flags().BoolVarP(&app.verbose, "verbose", "v", false, "enable debug logging")
 	command.AddCommand(newBatchCommand(app), newVersionCommand())

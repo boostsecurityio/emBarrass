@@ -44,6 +44,47 @@ version tags are published, it selects the latest release version.
 Prebuilt archives for Linux, macOS, and Windows will be available with tagged
 [GitHub releases](https://github.com/boostsecurityio/emBarrass/releases).
 
+### Shell completion
+
+Tab completion covers emBarrass subcommands, flags, and `--chain` values
+(`all`, `emsign`, and `sectigo`), including flags on `embarass batch`.
+
+For **Zsh**, add this to `~/.zshrc` after your existing completion setup:
+
+```zsh
+autoload -Uz compinit
+compinit
+source <(embarass completion zsh)
+```
+
+If your shell framework already runs `compinit`, only add the `source` line.
+Run the same lines in your current shell to enable completion immediately.
+
+For **Bash**, install your OS's `bash-completion` package, then add this to
+`~/.bashrc` after loading it:
+
+```bash
+source <(embarass completion bash)
+```
+
+For **Fish**, generate its automatically loaded completion file:
+
+```fish
+mkdir -p ~/.config/fish/completions
+embarass completion fish > ~/.config/fish/completions/embarass.fish
+```
+
+For **PowerShell**, add this to your `$PROFILE`:
+
+```powershell
+embarass completion powershell | Out-String | Invoke-Expression
+```
+
+Reopen your shell, then try `embarass ba<Tab>`, `embarass --he<Tab>`, or
+`embarass batch --chain <Tab>`. For a local build, load the script with
+`./embarass completion zsh` (or your shell's name). Completion covers
+emBarrass's own interface; it does not complete a wrapped tool's flags.
+
 ## Why this exists
 
 Eight eMudhra P-384 intermediate CA private scalars were generated with values below 256. Six were TLS issuing keys and two were code-signing keys. Each key appeared in both a directly issued eMudhra certificate and a Sectigo cross-certificate.
@@ -106,7 +147,10 @@ examples. `embarass --help` includes the complete list above.
 ### Batch testing installed tools
 
 `embarass batch` discovers `curl`, `git`, `gh`, `wget`, `npm`, `go`,
-`pip`/`pip3`, `docker`, and `crane` in `PATH`. Docker contributes two probes:
+`pip`/`pip3`, `docker`, `crane`, `aws`, `gcloud`, `cargo`, `uv`, `kubectl`,
+Python (`python3`/`python`), Node.js (`node`/`nodejs`), RubyGems (`gem`),
+`dotnet`, `pnpm`, HTTPie (`http`/`https`), `helm`, and `composer` in `PATH`.
+Docker contributes two probes:
 `docker` tests the host-side CLI with a manifest request, while `docker/git`
 runs Git inside a historical, pre-mitigation, digest-pinned image to test its
 embedded CA bundle. This does not test or make any claim about Chainguard's
@@ -125,8 +169,8 @@ selected for each installed tool and marks missing tools as skipped. The prompt
 defaults to **no**; only `y` starts the sweep.
 
 The probes run sequentially against public endpoints. Child output is
-discarded, the intercepted application request is not forwarded upstream, npm
-and Go caches are placed inside one temporary workspace, and that workspace is
+discarded, the intercepted application request is not forwarded upstream, tool
+caches and temporary configurations are placed inside one workspace, which is
 removed afterward. Package installation, repository checkout, and writes to
 the current directory are deliberately avoided.
 
@@ -142,6 +186,37 @@ The `gh` batch probe uses an intentionally invalid token and a temporary,
 isolated configuration directory. It cannot read or transmit the user's GitHub
 credentials. The `crane` probe similarly uses an isolated Docker configuration
 directory while fetching only a public image manifest.
+
+The additional probes work without logging in or installing packages:
+
+| Tool | Read-only probe | Isolation |
+|---|---|---|
+| AWS CLI (`aws`) | Unsigned `s3api head-bucket` for the public `noaa-goes16` bucket | Temporary default profile, no shared credential file, metadata lookup disabled |
+| `gcloud` | `components list` fetches Google's public component catalog | Temporary configuration, credential loading and usage reporting disabled |
+| `cargo` | `search serde --limit 1 --registry crates-io` | Temporary Cargo home and sparse registry access; rustup toolchain downloads disabled |
+| `uv` | Fetch a public Requests requirements file with `pip compile` | Temporary cache, no configuration discovery, builds, Python downloads, or keyring access |
+| `kubectl` | `get --raw=/version` against `https://example.com` | Empty kubeconfig and temporary cache; no cluster credentials or credential plugins |
+| Python | Standard-library `urllib.request` against `https://example.com/` | Isolated Python mode; no third-party packages required |
+| Node.js | A TLS `HEAD` request to `https://example.com/` | Embedded probe script uses the local proxy and Node's default certificate verification |
+| RubyGems (`gem`) | Remote search for `rake` on RubyGems.org | No gemrc configuration; temporary gem home, search path, and cache |
+| .NET (`dotnet`) | Search for `Newtonsoft.Json` on NuGet.org | Temporary CLI home and NuGet configuration/cache; telemetry and first-run development certificate generation disabled |
+| `pnpm` | Query `is-number` metadata on npmjs.org | Isolated npm configuration and caches; existing Corepack executable cache preserved and bootstrap downloads disabled |
+| HTTPie | `HEAD https://example.com/` | Temporary configuration; stdin and netrc credentials ignored |
+| `helm` | Show the public `hello-world` chart metadata | Temporary configuration, cache, and plugin paths; empty kubeconfig |
+| `composer` | Show public `symfony/console` metadata | Temporary project/configuration; plugins, scripts, cache, and interaction disabled |
+
+The Python probe requires Python 3, and the .NET probe requires SDK 8.0.2xx or
+later. Node's probe explicitly opens the local proxy tunnel so it also works on
+versions that do not automatically honor proxy environment variables. These
+runtime probes test the built-in TLS client; third-party HTTP libraries may
+use different trust stores. Older or incomplete tool installations can return
+an inconclusive result.
+
+The `kubectl` endpoint deliberately exercises HTTPS without requiring a real
+cluster. Only the TLS decision matters; the request is never forwarded.
+AWS uses [`--no-sign-request`](https://docs.aws.amazon.com/cli/latest/reference/s3api/head-bucket.html)
+and gcloud uses [`auth/disable_credentials`](https://docs.cloud.google.com/sdk/gcloud/reference/topic/configurations)
+to reach TLS without loading cloud credentials.
 
 The same credential protection applies automatically to the exact individual
 probe `gh api meta [--silent]`: emBarrass substitutes a throwaway token for the

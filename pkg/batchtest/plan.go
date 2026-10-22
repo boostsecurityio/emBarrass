@@ -6,6 +6,7 @@
 package batchtest
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -51,6 +52,19 @@ func Discover() (Plan, error) {
 	workspace, err := os.MkdirTemp("", workspacePattern)
 	if err != nil {
 		return Plan{}, fmt.Errorf("create batch workspace: %w", err)
+	}
+	// An explicit profile must exist even for unsigned AWS requests. Keep it
+	// separate from the user's configuration and credential-process settings.
+	if err := os.WriteFile(filepath.Join(workspace, "aws-config"), []byte("[default]\n"), 0o600); err != nil {
+		return Plan{}, errors.Join(fmt.Errorf("prepare AWS batch configuration: %w", err), (Plan{workspace: workspace}).Cleanup())
+	}
+	// With file logging disabled, gcloud may open its database before creating
+	// the configuration directory itself.
+	if err := os.Mkdir(filepath.Join(workspace, "gcloud-config"), 0o700); err != nil {
+		return Plan{}, errors.Join(fmt.Errorf("prepare gcloud batch configuration: %w", err), (Plan{workspace: workspace}).Cleanup())
+	}
+	if err := prepareEverydayProbes(workspace); err != nil {
+		return Plan{}, errors.Join(err, (Plan{workspace: workspace}).Cleanup())
 	}
 	return discover(workspace, exec.LookPath), nil
 }
@@ -103,7 +117,7 @@ func firstExecutable(candidates []string, lookup pathLookup) string {
 }
 
 func supportedTools() []toolDefinition {
-	return []toolDefinition{
+	return append([]toolDefinition{
 		{
 			name:        "curl",
 			executables: []string{"curl"},
@@ -252,6 +266,117 @@ func supportedTools() []toolDefinition {
 			},
 		},
 		{
+			name:        "aws",
+			executables: []string{"aws"},
+			build: func(executable, workspace string) Probe {
+				arguments := []string{
+					"s3api", "head-bucket", "--bucket", "noaa-goes16",
+					"--region", "us-east-1", "--endpoint-url", "https://s3.us-east-1.amazonaws.com",
+					"--no-sign-request",
+				}
+				return Probe{
+					Name:       "aws",
+					Executable: executable,
+					Arguments:  arguments,
+					Preview:    "aws " + strings.Join(arguments, " "),
+					EnvironmentOverrides: map[string]string{
+						"AWS_CONFIG_FILE":             filepath.Join(workspace, "aws-config"),
+						"AWS_SHARED_CREDENTIALS_FILE": os.DevNull,
+						"AWS_PROFILE":                 "default",
+						"AWS_DEFAULT_PROFILE":         "default",
+						"AWS_EC2_METADATA_DISABLED":   "true",
+						"AWS_CLI_AUTO_PROMPT":         "off",
+						"AWS_PAGER":                   "",
+						"AWS_MAX_ATTEMPTS":            "1",
+					},
+				}
+			},
+		},
+		{
+			name:        "gcloud",
+			executables: []string{"gcloud"},
+			build: func(executable, workspace string) Probe {
+				arguments := []string{"components", "list", "--quiet"}
+				return Probe{
+					Name:       "gcloud",
+					Executable: executable,
+					Arguments:  arguments,
+					Preview:    "gcloud " + strings.Join(arguments, " "),
+					EnvironmentOverrides: map[string]string{
+						"CLOUDSDK_CONFIG":                                 filepath.Join(workspace, "gcloud-config"),
+						"CLOUDSDK_ACTIVE_CONFIG_NAME":                     "default",
+						"CLOUDSDK_AUTH_DISABLE_CREDENTIALS":               "true",
+						"CLOUDSDK_CORE_DISABLE_PROMPTS":                   "true",
+						"CLOUDSDK_CORE_DISABLE_USAGE_REPORTING":           "true",
+						"CLOUDSDK_CORE_DISABLE_FILE_LOGGING":              "true",
+						"CLOUDSDK_CORE_CHECK_GCE_METADATA":                "false",
+						"CLOUDSDK_COMPONENT_MANAGER_DISABLE_UPDATE_CHECK": "true",
+						"CLOUDSDK_COMPONENT_MANAGER_SNAPSHOT_URL":         "https://dl.google.com/dl/cloudsdk/channels/rapid/components-2.json",
+					},
+				}
+			},
+		},
+		{
+			name:        "cargo",
+			executables: []string{"cargo"},
+			build: func(executable, workspace string) Probe {
+				arguments := []string{"search", "serde", "--limit", "1", "--registry", "crates-io"}
+				return Probe{
+					Name:       "cargo",
+					Executable: executable,
+					Arguments:  arguments,
+					Preview:    "cargo " + strings.Join(arguments, " "),
+					EnvironmentOverrides: map[string]string{
+						"CARGO_HOME":                          filepath.Join(workspace, "cargo"),
+						"CARGO_REGISTRIES_CRATES_IO_PROTOCOL": "sparse",
+						"CARGO_NET_RETRY":                     "0",
+						"RUSTUP_AUTO_INSTALL":                 "0",
+					},
+				}
+			},
+		},
+		{
+			name:        "uv",
+			executables: []string{"uv"},
+			build: func(executable, workspace string) Probe {
+				arguments := []string{
+					"--no-config", "--no-python-downloads", "pip", "compile",
+					"https://raw.githubusercontent.com/psf/requests/main/requirements-dev.txt",
+					"--no-build", "--no-deps", "--python-version", "3.12",
+					"--keyring-provider", "disabled",
+				}
+				return Probe{
+					Name:       "uv",
+					Executable: executable,
+					Arguments:  arguments,
+					Preview:    "uv " + strings.Join(arguments, " "),
+					EnvironmentOverrides: map[string]string{
+						"UV_CACHE_DIR":    filepath.Join(workspace, "uv-cache"),
+						"UV_WORKING_DIR":  workspace,
+						"UV_HTTP_RETRIES": "0",
+						"NETRC":           os.DevNull,
+					},
+				}
+			},
+		},
+		{
+			name:        "kubectl",
+			executables: []string{"kubectl"},
+			build: func(executable, workspace string) Probe {
+				arguments := []string{
+					"--kubeconfig", os.DevNull, "--server", "https://example.com",
+					"--cache-dir", filepath.Join(workspace, "kubectl-cache"),
+					"get", "--raw=/version",
+				}
+				return Probe{
+					Name:       "kubectl",
+					Executable: executable,
+					Arguments:  arguments,
+					Preview:    "kubectl " + strings.Join(arguments, " "),
+				}
+			},
+		},
+		{
 			name:        "crane",
 			executables: []string{"crane"},
 			build: func(executable, workspace string) Probe {
@@ -266,7 +391,7 @@ func supportedTools() []toolDefinition {
 				}
 			},
 		},
-	}
+	}, everydayTools()...)
 }
 
 func dockerGitArguments(goos string) []string {

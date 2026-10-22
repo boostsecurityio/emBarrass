@@ -42,6 +42,7 @@ immutable, digest-pinned image.`,
 	command.Flags().BoolVarP(&app.batchYes, "yes", "y", false, "run the displayed probes without prompting")
 	command.Flags().DurationVar(&app.timeout, "timeout", defaultTimeout, "maximum runtime per tool and trust path; 0 disables the deadline")
 	command.Flags().StringVar(&app.chain, "chain", chainAll, chainFlagUsage)
+	registerChainCompletion(command)
 	command.Flags().BoolVar(&app.headless, "headless", false, "emit compact log lines without the terminal UI")
 	command.Flags().BoolVarP(&app.verbose, "verbose", "v", false, "enable debug logging")
 	return command
