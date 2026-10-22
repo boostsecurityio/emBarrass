@@ -44,6 +44,47 @@ version tags are published, it selects the latest release version.
 Prebuilt archives for Linux, macOS, and Windows will be available with tagged
 [GitHub releases](https://github.com/boostsecurityio/emBarrass/releases).
 
+### Shell completion
+
+Tab completion covers emBarrass subcommands, flags, and `--chain` values
+(`all`, `emsign`, and `sectigo`), including flags on `embarass batch`.
+
+For **Zsh**, add this to `~/.zshrc` after your existing completion setup:
+
+```zsh
+autoload -Uz compinit
+compinit
+source <(embarass completion zsh)
+```
+
+If your shell framework already runs `compinit`, only add the `source` line.
+Run the same lines in your current shell to enable completion immediately.
+
+For **Bash**, install your OS's `bash-completion` package, then add this to
+`~/.bashrc` after loading it:
+
+```bash
+source <(embarass completion bash)
+```
+
+For **Fish**, generate its automatically loaded completion file:
+
+```fish
+mkdir -p ~/.config/fish/completions
+embarass completion fish > ~/.config/fish/completions/embarass.fish
+```
+
+For **PowerShell**, add this to your `$PROFILE`:
+
+```powershell
+embarass completion powershell | Out-String | Invoke-Expression
+```
+
+Reopen your shell, then try `embarass ba<Tab>`, `embarass --he<Tab>`, or
+`embarass batch --chain <Tab>`. For a local build, load the script with
+`./embarass completion zsh` (or your shell's name). Completion covers
+emBarrass's own interface; it does not complete a wrapped tool's flags.
+
 ## Why this exists
 
 Eight eMudhra P-384 intermediate CA private scalars were generated with values below 256. Six were TLS issuing keys and two were code-signing keys. Each key appeared in both a directly issued eMudhra certificate and a Sectigo cross-certificate.
