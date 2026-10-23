@@ -55,6 +55,9 @@ func Execute() int {
 		if app.headless {
 			log := logger.Setup(app.verbose, command.ErrOrStderr())
 			log.Error().Err(err).Msg("emBarrass failed")
+			if errors.Is(err, errCommandRequired) {
+				app.logRepairCallToAction(&log)
+			}
 		} else {
 			ui := newTerminalUI(command.ErrOrStderr())
 			if errors.Is(err, errCommandRequired) {
@@ -84,7 +87,12 @@ emBarrass routes one command through an authenticated local HTTPS interceptor.
 The interceptor is loopback-only except for the disclosed docker/git batch probe,
 which makes it reachable from that container. The tested client keeps its native
 CA configuration: emBarrass does not inject a CA file, disable verification,
-forward intercepted traffic, or change the host trust store.`,
+forward intercepted traffic, or change the host trust store.
+
+The explicit fix subcommand can apply a reversible emergency repair to supported
+macOS and Linux CA stores. If you're completely or partially embarrassed,
+preview the repair with fix --dry-run, apply with fix, then recheck with batch.
+Private CA bundles and containers need separate updates.`,
 		Example: fmt.Sprintf(`  # Test individual tools with public, read-only requests
   %[1]s curl --silent https://example.com/
   %[1]s git ls-remote https://github.com/actions/checkout.git HEAD
@@ -97,6 +105,11 @@ forward intercepted traffic, or change the host trust store.`,
   %[1]s crane manifest registry.k8s.io/pause:3.10
 
   # Preview and confirm installed-tool probes, including a container CA bundle
+  %[1]s batch
+
+  # Embarrassed? Preview, repair, and recheck
+  %[1]s fix --dry-run
+  %[1]s fix
   %[1]s batch`, invocation),
 		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) == 0 {
@@ -120,7 +133,7 @@ forward intercepted traffic, or change the host trust store.`,
 	registerChainCompletion(command)
 	command.Flags().BoolVar(&app.headless, "headless", false, "emit compact log lines without the terminal UI")
 	command.Flags().BoolVarP(&app.verbose, "verbose", "v", false, "enable debug logging")
-	command.AddCommand(newBatchCommand(app), newVersionCommand())
+	command.AddCommand(newBatchCommand(app), newFixCommand(app), newFixCommitCommand(), newVersionCommand())
 	return command
 }
 
@@ -158,6 +171,7 @@ func (app *application) runCheck(cmd *cobra.Command, args []string) error {
 	}
 	preparedCommand, adjustments := runner.PrepareCommand(args)
 	ui := newTerminalUI(cmd.ErrOrStderr())
+	ui.invocation = app.displayedInvocation()
 	if !app.headless {
 		if err := ui.start(args, chains, app.timeout, adjustments); err != nil {
 			return err
@@ -201,7 +215,19 @@ func (app *application) runCheck(cmd *cobra.Command, args []string) error {
 		return ui.result(result, reportedChains, app.exitCode)
 	}
 	logHeadlessResult(zerolog.Ctx(cmd.Context()), result, reportedChains)
+	if result.Outcome == runner.OutcomeVulnerable {
+		app.logRepairCallToAction(zerolog.Ctx(cmd.Context()))
+	}
 	return nil
+}
+
+func (app *application) logRepairCallToAction(log *zerolog.Logger) {
+	invocation := app.displayedInvocation()
+	log.Warn().
+		Str("preview", invocation+" fix --dry-run").
+		Str("repair", invocation+" fix").
+		Str("recheck", invocation+" batch").
+		Msg("TAKE BACK TRUST: " + repairScope)
 }
 
 func logHeadlessAdjustments(log *zerolog.Logger, adjustments []runner.CommandAdjustment) {

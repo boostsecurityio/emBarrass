@@ -40,20 +40,21 @@ type batchItem struct {
 }
 
 type batchModel struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	styles    terminalStyles
-	plan      batchtest.Plan
-	run       runFunc
-	timeout   time.Duration
-	items     []batchItem
-	current   int
-	spinner   int
-	width     int
-	autoStart bool
-	confirmed bool
-	done      bool
-	canceled  bool
+	ctx        context.Context
+	cancel     context.CancelFunc
+	styles     terminalStyles
+	plan       batchtest.Plan
+	run        runFunc
+	timeout    time.Duration
+	invocation string
+	items      []batchItem
+	current    int
+	spinner    int
+	width      int
+	autoStart  bool
+	confirmed  bool
+	done       bool
+	canceled   bool
 }
 
 type batchStartMsg struct{}
@@ -207,6 +208,7 @@ func (model batchModel) View() string {
 		"",
 		"  " + model.styles.cyanBold.Render("BATCH TRUST PREFLIGHT"),
 		"  " + model.styles.muted.Render("intercepted traffic stays local · temporary caches removed"),
+		"  " + model.styles.cyanBold.Render("EXPOSED?") + " Preview emergency repair: " + displayedInvocation(model.invocation) + " fix --dry-run",
 		"",
 	}
 	if model.mayPullImage() {
@@ -267,6 +269,9 @@ func (model batchModel) View() string {
 			"  "+model.styles.yellowBold.Render("Testing sequentially…")+
 				" "+model.styles.muted.Render("q cancels the active child and remaining probes"),
 		)
+	}
+	if (model.done || model.canceled) && model.summary().vulnerable > 0 {
+		lines = append(lines, "", repairCallToAction(model.styles, model.invocation, model.width-4))
 	}
 	return strings.Join(lines, "\n")
 }

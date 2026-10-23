@@ -203,11 +203,13 @@ func Run(ctx context.Context, options Options) (Result, error) {
 				return vulnerableResult(startedAt, state, childErr), nil
 			}
 		case childErr := <-processDone:
-			state = drainObservations(ctx, state, server.Observations())
-			if state.accepted {
-				return vulnerableResult(startedAt, state, childErr), nil
+			// Stop accepting connections, then let existing handlers record the
+			// child's final TLS alert. Canceling their context here would create
+			// artificial handshake failures; a nonblocking drain races the alert.
+			if err := server.Close(); err != nil {
+				return Result{}, fmt.Errorf("close interceptor after child exit: %w", err)
 			}
-			return completedResult(startedAt, state, childErr), nil
+			return finishRun(ctx, startedAt, state, childErr, server.Observations(), serverErrors, timeout)
 		case serverErr := <-serverErrors:
 			if serverErr == nil {
 				serverErrors = nil
@@ -240,6 +242,38 @@ func Run(ctx context.Context, options Options) (Result, error) {
 			}
 			<-processDone //nolint:errcheck // The cancellation cause takes precedence over the stopped child's exit error.
 			return Result{}, fmt.Errorf("run wrapped command: %w", context.Cause(ctx))
+		}
+	}
+}
+
+func finishRun(ctx context.Context, startedAt time.Time, state observationState, childErr error,
+	observations <-chan intercept.Observation, serverErrors <-chan error, timeout <-chan time.Time,
+) (Result, error) {
+	for {
+		select {
+		case observation := <-observations:
+			state = applyObservation(ctx, state, observation)
+			if state.accepted {
+				return vulnerableResult(startedAt, state, childErr), nil
+			}
+		case err := <-serverErrors:
+			if err != nil {
+				return Result{}, fmt.Errorf("finish local interceptor: %w", err)
+			}
+			state = drainObservations(ctx, state, observations)
+			if state.accepted {
+				return vulnerableResult(startedAt, state, childErr), nil
+			}
+			return completedResult(startedAt, state, childErr), nil
+		case <-timeout:
+			state = drainObservations(ctx, state, observations)
+			if state.accepted {
+				return vulnerableResult(startedAt, state, childErr), nil
+			}
+			return Result{Outcome: OutcomeInconclusive, Reason: ReasonTimeout, Host: state.host,
+				ChildExitCode: exitCode(childErr), Duration: time.Since(startedAt)}, nil
+		case <-ctx.Done():
+			return Result{}, fmt.Errorf("finish wrapped command: %w", context.Cause(ctx))
 		}
 	}
 }

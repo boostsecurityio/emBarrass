@@ -44,6 +44,7 @@ type terminalUI struct {
 	output      io.Writer
 	styles      terminalStyles
 	interactive bool
+	invocation  string
 }
 
 type terminalStyles struct {
@@ -124,7 +125,8 @@ func (ui terminalUI) start(
 
 	if _, err := fmt.Fprintln(
 		ui.output,
-		"\n\n  CHILD OUTPUT "+strings.Repeat("─", 47),
+		"\n\n  "+ui.styles.cyanBold.Render("EXPOSED?")+" Preview emergency repair: "+displayedInvocation(ui.invocation)+" fix --dry-run"+
+			"\n\n  CHILD OUTPUT "+strings.Repeat("─", 47),
 	); err != nil {
 		return fmt.Errorf("write terminal child output separator: %w", err)
 	}
@@ -171,7 +173,22 @@ func (ui terminalUI) vulnerableResult(
 		"",
 	)
 	lines = append(lines, ui.resultMetadata(result, chains, exitCode)...)
+	lines = append(lines, "", repairCallToAction(ui.styles, ui.invocation, 72))
 	return strings.Join(lines, "\n")
+}
+
+const repairScope = "Supported macOS/Linux system stores only. Private CA bundles and containers need separate updates."
+
+func repairCallToAction(styles terminalStyles, invocation string, width int) string {
+	invocation = displayedInvocation(invocation)
+	wrap := lipgloss.NewStyle().Width(max(24, width)).MarginLeft(2).Render
+	return strings.Join([]string{
+		"  " + styles.cyanBold.Render("TAKE BACK TRUST"),
+		wrap("Preview  → " + styles.cyanBold.Render(invocation+" fix --dry-run")),
+		wrap("Repair   → " + styles.greenBold.Render(invocation+" fix")),
+		wrap("Recheck  → " + styles.cyanBold.Render(invocation+" batch")),
+		wrap(styles.muted.Render(repairScope)),
+	}, "\n")
 }
 
 func (ui terminalUI) rejectedResult(
@@ -258,6 +275,8 @@ func (ui terminalUI) missingCommand(invocation string) error {
 		"",
 		"     Or discover and safely test supported tools:",
 		"     " + ui.styles.greenBold.Render(invocation+" batch"),
+		"",
+		repairCallToAction(ui.styles, invocation, 72),
 		"",
 		"     " + ui.styles.muted.Render("More examples: "+invocation+" --help"),
 		ui.detail(ui.styles.bold, "EXIT", strconv.Itoa(exitInconclusive)),

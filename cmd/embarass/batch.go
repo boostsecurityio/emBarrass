@@ -33,7 +33,12 @@ deleted temporary workspace. The docker/git probe may pull and retain one
 immutable, digest-pinned image.`,
 		Example: fmt.Sprintf(`  %[1]s batch
   %[1]s batch --chain emsign
-  %[1]s batch --yes --headless`, invocation),
+  %[1]s batch --yes --headless
+
+  # Completely or partially embarrassed? Preview, repair, and recheck
+  %[1]s fix --dry-run
+  %[1]s fix
+  %[1]s batch`, invocation),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return app.runBatch(cmd)
@@ -109,6 +114,7 @@ func (app *application) runBatchTerminal(
 		app.timeout,
 		app.batchYes,
 	)
+	model.invocation = app.displayedInvocation()
 	program := tea.NewProgram(
 		model,
 		tea.WithInput(cmd.InOrStdin()),
@@ -158,6 +164,9 @@ func (app *application) runBatchHeadless(
 		Int("errors", summary.failed).
 		Int("unavailable", summary.skipped).
 		Msg("BATCH COMPLETE")
+	if summary.vulnerable > 0 {
+		app.logRepairCallToAction(log)
+	}
 	return summary
 }
 
