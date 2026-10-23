@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 
@@ -40,20 +41,27 @@ type batchItem struct {
 }
 
 type batchModel struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	styles    terminalStyles
-	plan      batchtest.Plan
-	run       runFunc
-	timeout   time.Duration
-	items     []batchItem
-	current   int
-	spinner   int
-	width     int
-	autoStart bool
-	confirmed bool
-	done      bool
-	canceled  bool
+	ctx             context.Context
+	cancel          context.CancelFunc
+	styles          terminalStyles
+	plan            batchtest.Plan
+	run             runFunc
+	timeout         time.Duration
+	invocation      string
+	items           []batchItem
+	current         int
+	spinner         int
+	width           int
+	autoStart       bool
+	confirmed       bool
+	done            bool
+	canceled        bool
+	reviewResults   bool
+	detailsExpanded bool
+	detailIndex     int
+	detailScroll    int
+	height          int
+	platform        string
 }
 
 type batchStartMsg struct{}
@@ -86,6 +94,8 @@ func newBatchModel(
 		timeout:   timeout,
 		items:     items,
 		width:     80,
+		height:    30,
+		platform:  runtime.GOOS,
 		autoStart: autoStart,
 	}
 }
@@ -101,9 +111,14 @@ func (model batchModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.WindowSizeMsg:
 		model.width = message.Width
+		model.height = message.Height
+		model.detailScroll = 0
 		return model, nil
 	case tea.KeyMsg:
 		key := strings.ToLower(message.String())
+		if model.done {
+			return model.reviewKey(key)
+		}
 		if !model.confirmed {
 			if key == "y" {
 				return model.begin()
@@ -131,7 +146,7 @@ func (model batchModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.spinner = (model.spinner + 1) % len(batchSpinnerFrames)
 		return model, batchSpinnerTick()
 	case batchResultMsg:
-		if message.index < 0 || message.index >= len(model.items) {
+		if model.done || message.index < 0 || message.index >= len(model.items) {
 			return model, nil
 		}
 		item := &model.items[message.index]
@@ -142,6 +157,9 @@ func (model batchModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.current = message.index + 1
 		if model.current >= len(model.items) {
 			model.done = true
+			if model.reviewResults && model.summary().vulnerable > 0 {
+				return model, nil
+			}
 			return model, tea.Quit
 		}
 		model.items[model.current].state = batchRunning
@@ -196,6 +214,9 @@ func batchState(result runner.Result, err error) batchItemState {
 }
 
 func (model batchModel) View() string {
+	if model.done && !model.canceled && model.detailsExpanded && model.summary().vulnerable > 0 {
+		return model.remediationView()
+	}
 	logoText := terminalLogo
 	if model.width > 0 && model.width < 70 {
 		logoText = "emBarrass // BATCH TLS TRUST SWEEP"
@@ -207,6 +228,7 @@ func (model batchModel) View() string {
 		"",
 		"  " + model.styles.cyanBold.Render("BATCH TRUST PREFLIGHT"),
 		"  " + model.styles.muted.Render("intercepted traffic stays local · temporary caches removed"),
+		"  " + model.styles.cyanBold.Render("EXPOSED?") + " Preview emergency repair: " + displayedInvocation(model.invocation) + " fix --dry-run",
 		"",
 	}
 	if model.mayPullImage() {
@@ -267,6 +289,14 @@ func (model batchModel) View() string {
 			"  "+model.styles.yellowBold.Render("Testing sequentially…")+
 				" "+model.styles.muted.Render("q cancels the active child and remaining probes"),
 		)
+	}
+	if (model.done || model.canceled) && model.summary().vulnerable > 0 {
+		lines = append(lines, "", repairCallToAction(model.styles, model.invocation, model.width-4))
+		if model.reviewResults && !model.canceled {
+			lines = append(lines, "", "  "+model.styles.yellowBold.Render("[d] WHY STILL EXPOSED?"),
+				"  "+model.styles.muted.Render("Root cause · update vs system repair · per-tool next steps"),
+				"  "+model.styles.muted.Render("Enter or q exits with the recorded result."))
+		}
 	}
 	return strings.Join(lines, "\n")
 }

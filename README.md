@@ -16,7 +16,10 @@
 
 `emBarrass` is a local, open-source validator for the weak eMudhra intermediate CA keys disclosed in October 2026. It wraps a command, presents that command with a forged TLS certificate signed by a recovered eMudhra key, and reports whether the command accepted it.
 
-It does **not** replace the command's CA bundle, disable certificate verification, modify the host trust store, or forward traffic to the destination.
+The command wrapper and `batch` do **not** replace the command's CA bundle,
+disable certificate verification, modify the host trust store, or forward
+traffic to the destination. The explicit `fix` subcommand can apply the
+reversible macOS and Linux emergency mitigations described below.
 
 ## Quickstart
 
@@ -31,6 +34,19 @@ embarass
 
 `make install` installs the current checkout into `GOBIN`, or `GOPATH/bin` when
 `GOBIN` is unset.
+
+**Completely or partially embarrassed? Take back trust:**
+
+```console
+embarass fix --dry-run
+embarass fix
+embarass batch
+```
+
+`fix` previews and applies an emergency repair to supported macOS/Linux system
+stores, with confirmation and recovery data. Private CA bundles and containers
+need separate updates. See [emergency repair](#emergency-repair-on-macos-and-linux)
+for platform coverage and undo.
 
 Alternatively, install directly with Go:
 
@@ -144,6 +160,99 @@ The default output is an interactive, human-readable terminal report with distin
 Running `embarass` without a child command prints a short set of copyable
 examples. `embarass --help` includes the complete list above.
 
+### Emergency repair on macOS and Linux
+
+```console
+embarass fix --dry-run
+embarass fix
+embarass fix --yes --headless
+embarass fix --undo
+```
+
+`fix` detects a supported system store and displays a colored repair plan with
+the exact certificate fingerprints. It asks for confirmation and records recovery
+data before removing trust in `AAA Certificate Services` and
+`emSign ECC Root CA - G3`. It follows the
+[incident advisory's platform workarounds](https://emudhra.we-have-a-problem.com/#workarounds).
+**Legitimate chains relying solely on either root also lose trust.**
+
+| Platform | Emergency repair |
+|---|---|
+| macOS | Atomically remove fingerprint-matched PEM blocks from `/etc/ssl/cert.pem`. |
+| Debian, Ubuntu, Alpine | Deselect fingerprint-matched vendor source entries in `/etc/ca-certificates.conf`, then run `/usr/sbin/update-ca-certificates`. |
+| Fedora, RHEL, CentOS, Rocky, AlmaLinux, Amazon Linux, Oracle Linux | Add individually recorded distrust files under `/etc/pki/ca-trust/source/blocklist` (or the legacy `blacklist` directory), then run `/usr/bin/update-ca-trust extract`. |
+
+On Linux, vendor CA-package updates remain the preferred fix. This emergency
+repair uses already installed certificates and native tools; it does not run a
+package manager or download certificates. Minimal Alpine images with only
+`ca-certificates-bundle` need the full `ca-certificates` package first. Other
+Linux distributions are reported as unsupported rather than guessing their
+store layout. See the [Linux source review](docs/research/linux-emergency-fix.md).
+
+Native repair, both forged trust paths, unrelated enterprise trust, and undo
+have been exercised in disposable Debian, Alpine, and Fedora containers.
+The other listed distributions share those implementations but have not each
+been tested in a container. Arch and openSUSE are not yet supported.
+
+Run it as your normal user. Only the file transaction requests `sudo`; before
+and after probes run without elevation. The animated terminal shows actual
+operation progress and a final receipt with the backup location and undo
+command. `--dry-run` only inspects the file; it neither writes nor runs probes.
+Noninteractive application requires `--yes`. `--headless` prints plain progress.
+
+On macOS, the repair targets `/etc/ssl/cert.pem` (its canonical path is
+`/private/etc/ssl/cert.pem`). Every certificate is parsed, and removal uses
+pinned SHA-256 certificate fingerprints. Unrelated certificates and descriptive
+text are preserved. A protected adjacent receipt and original bundle are
+retained; symlinks, unsafe ownership, concurrent emBarrass writers, and changed
+preview contents are refused. Undo refuses an intervening OS or administrator
+edit and retains the original backup in an archived receipt directory.
+Undo reintroduces the original trust anchors. If a transaction is interrupted,
+inspect `embarass fix --undo --dry-run` before recovering it.
+
+The macOS repair does not lock the bundle against changes, disable Apple updates, or
+install a background process that reapplies it. Apple can replace the file
+normally. A later replacement becomes the active bundle; undo refuses to
+overwrite contents that differ from the recorded repair. This does not predict
+what a future Apple update will contain, so recheck afterward.
+
+On Linux, the preview names the configuration/distrust location and native
+regeneration command. Regeneration runs the distribution's installed hooks and
+can update several outputs; it is **not an atomic bundle swap**. Verification
+checks that the regenerated TLS bundle lacks the targeted roots and retains
+unrelated certificates. An updater failure leaves the receipt at
+`/etc/embarass-fix/receipt.json` for inspection and recovery. Existing local CA
+copies that bypass Debian-style deselection require manual review.
+
+Linux undo reverses only recorded source changes and regenerates from the
+**current vendor policy**. It never copies an old generated bundle over a vendor
+update. Modified Debian/Ubuntu/Alpine configuration or vendor source certificates
+cause undo to refuse; pre-existing p11-kit distrust files remain untouched.
+Native Java and other trust outputs depend on installed hooks and need their own
+client checks. The TLS-bundle result is not a blanket assertion about those stores.
+
+Verification challenges the system `/usr/bin/curl` against both local DV-G3B
+forgeries, explicitly selecting this bundle and an empty additional CA
+directory. Curl startup configuration is disabled. A rejected result requires
+a certificate-verification exit code as well as the local TLS observation.
+No external test server or certificate download is needed. A successful bundle
+edit and a successful behavioral check are reported separately; an
+inconclusive probe is never labeled protected. Running the entire command as
+root skips behavioral probes and reports verification incomplete.
+
+These repairs cover the **selected system store only**. Apple pip, independent
+runtime bundles, and containers may remain exposed. Use `embarass batch` as
+your normal user to inspect them; its intentionally historical `docker/git`
+fixture is not a host-repair success criterion. Vendor updates can replace
+the system bundle or its inputs, so check again after updates. Each container
+must be repaired or rebuilt separately. See the
+[platform research](docs/research/macos-emergency-fix.md).
+
+Repair exit codes: `0` means both post-repair probes rejected the forgeries
+(or a preview/undo completed); `1` means a post-repair probe still accepted a
+forgery; `2` means an error, cancellation, or incomplete verification. A repair
+can remain applied when verification exits `1` or `2`; consult the receipt.
+
 ### Batch testing installed tools
 
 `embarass batch` discovers `curl`, `git`, `gh`, `wget`, `npm`, `go`,
@@ -235,6 +344,32 @@ at least one result is inconclusive or errored, and `0` only when every executed
 probe rejected the forged chain. Tools absent from `PATH` do not affect the
 exit code. Canceling before the first probe also exits `0`; canceling a partial
 sweep exits `2` unless a vulnerability was already confirmed.
+
+### Understanding partial exposure
+
+Interactive batches with exposed tools stay open at the result screen. Press
+**d** for per-tool explanations, **left/right** to switch exposed tools, and
+**up/down** or **Page Up/Page Down** to scroll. **d** or **Escape** returns to the
+summary; **q** or **Enter** exits with the recorded verdict. Opening details does
+not run commands, change trust, or turn the result into a cancellation.
+
+Use `embarass batch --details` to open explanations immediately, or
+`embarass batch --yes --headless --details` to include them in plain logs.
+
+Different results can reflect different trust sources:
+
+| Path | What to do |
+|---|---|
+| System/OpenSSL CA bundles | Vendor CA updates or `fix` may help clients such as curl, git, gem, and cargo when their build uses the selected store. Overrides and other builds may differ. |
+| Bundled roots, runtimes, or trust-library dependencies | Update the tool with its original installer. For Homebrew installations, examples include `brew update` followed by `brew upgrade awscli`, `python`, `node`, or `uv`; use the actual installed formula/cask name, including versioned names. An improved result after upgrading does not prove the roots were bundled. |
+| gcloud's SDK trust | Update the SDK or explicitly select a verified patched CA file. On macOS, after confirming the system bundle is repaired, `export CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE=/etc/ssl/cert.pem` applies to that shell and its children. Include required enterprise CAs. Batch isolates saved gcloud configuration but inherits this environment variable. |
+| .NET native trust on macOS | PEM repair does not modify Keychain trust. Update macOS and .NET and retest; remaining exposure needs separate native-trust remediation. Sharing trust anchors with Safari does not guarantee the same validation policy. |
+| Container trust | Update and rebuild the actual workload image. Host repair cannot fix the intentionally historical `docker/git` fixture. |
+
+The details identify **likely trust paths**, not detected CA configuration or
+package-manager ownership. Acceptance is observed; its exact cause needs
+tool-specific investigation. Sources: [gcloud custom CA configuration](https://docs.cloud.google.com/sdk/docs/proxy-settings),
+[.NET Apple chain validation](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Security.Cryptography/src/System/Security/Cryptography/X509Certificates/ChainPal.Apple.cs).
 
 ### Git HTTPS transport pinning
 

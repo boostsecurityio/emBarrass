@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"strings"
 	"time"
 
@@ -30,16 +31,27 @@ commands, ask for confirmation, and run the probes sequentially.
 Each probe uses a public endpoint. The intercepted request is never forwarded
 upstream, child output is discarded, and cache writes use an automatically
 deleted temporary workspace. The docker/git probe may pull and retain one
-immutable, digest-pinned image.`,
+immutable, digest-pinned image.
+
+Exposed interactive results stay open: press d for per-tool trust and repair
+details, then q to exit. Use --details to open them immediately or include them
+in headless output. Explanations do not change configuration or run repairs.`,
 		Example: fmt.Sprintf(`  %[1]s batch
   %[1]s batch --chain emsign
-  %[1]s batch --yes --headless`, invocation),
+  %[1]s batch --yes --headless
+  %[1]s batch --yes --headless --details
+
+  # Completely or partially embarrassed? Preview, repair, and recheck
+  %[1]s fix --dry-run
+  %[1]s fix
+  %[1]s batch`, invocation),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return app.runBatch(cmd)
 		},
 	}
 	command.Flags().BoolVarP(&app.batchYes, "yes", "y", false, "run the displayed probes without prompting")
+	command.Flags().BoolVar(&app.batchDetails, "details", false, "explain exposed tools' trust sources, repair coverage, and remediation")
 	command.Flags().DurationVar(&app.timeout, "timeout", defaultTimeout, "maximum runtime per tool and trust path; 0 disables the deadline")
 	command.Flags().StringVar(&app.chain, "chain", chainAll, chainFlagUsage)
 	registerChainCompletion(command)
@@ -109,6 +121,9 @@ func (app *application) runBatchTerminal(
 		app.timeout,
 		app.batchYes,
 	)
+	model.invocation = app.displayedInvocation()
+	model.reviewResults = true
+	model.detailsExpanded = app.batchDetails
 	program := tea.NewProgram(
 		model,
 		tea.WithInput(cmd.InOrStdin()),
@@ -150,6 +165,13 @@ func (app *application) runBatchHeadless(
 		result, reportedChains, err := runChains(ctx, app.run, batchRunnerOptions(plan, probe, app.timeout), chains, nil)
 		summary.record(result, err)
 		logBatchResult(log, probe.Name, result, reportedChains, err)
+		if app.batchDetails && err == nil && result.Outcome == runner.OutcomeVulnerable {
+			guidance := remediationFor(probe, runtime.GOOS, app.displayedInvocation())
+			log.Warn().Str("tool", probe.Name).Str("trust_path", guidance.cause).
+				Str("fix_coverage", guidance.coverage).Str("remediation", guidance.remediation).
+				Strs("commands", guidance.commands).Str("details", guidance.details).
+				Msg("REMEDIATION: acceptance confirmed; trust source is guidance, not detected configuration")
+		}
 	}
 	log.Info().
 		Int("embarrassed", summary.vulnerable).
@@ -158,6 +180,13 @@ func (app *application) runBatchHeadless(
 		Int("errors", summary.failed).
 		Int("unavailable", summary.skipped).
 		Msg("BATCH COMPLETE")
+	if summary.vulnerable > 0 {
+		app.logRepairCallToAction(log)
+		if !app.batchDetails {
+			log.Info().Str("command", app.displayedInvocation()+" batch --yes --headless --details").
+				Msg("Rerun with per-tool root-cause and remediation guidance")
+		}
+	}
 	return summary
 }
 
