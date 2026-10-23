@@ -37,6 +37,7 @@ type application struct {
 	verbose         bool
 	headless        bool
 	batchYes        bool
+	batchDetails    bool
 	terminalStarted bool
 	timeout         time.Duration
 	chain           string

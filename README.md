@@ -345,6 +345,32 @@ probe rejected the forged chain. Tools absent from `PATH` do not affect the
 exit code. Canceling before the first probe also exits `0`; canceling a partial
 sweep exits `2` unless a vulnerability was already confirmed.
 
+### Understanding partial exposure
+
+Interactive batches with exposed tools stay open at the result screen. Press
+**d** for per-tool explanations, **left/right** to switch exposed tools, and
+**up/down** or **Page Up/Page Down** to scroll. **d** or **Escape** returns to the
+summary; **q** or **Enter** exits with the recorded verdict. Opening details does
+not run commands, change trust, or turn the result into a cancellation.
+
+Use `embarass batch --details` to open explanations immediately, or
+`embarass batch --yes --headless --details` to include them in plain logs.
+
+Different results can reflect different trust sources:
+
+| Path | What to do |
+|---|---|
+| System/OpenSSL CA bundles | Vendor CA updates or `fix` may help clients such as curl, git, gem, and cargo when their build uses the selected store. Overrides and other builds may differ. |
+| Bundled roots, runtimes, or trust-library dependencies | Update the tool with its original installer. For Homebrew installations, examples include `brew update` followed by `brew upgrade awscli`, `python`, `node`, or `uv`; use the actual installed formula/cask name, including versioned names. An improved result after upgrading does not prove the roots were bundled. |
+| gcloud's SDK trust | Update the SDK or explicitly select a verified patched CA file. On macOS, after confirming the system bundle is repaired, `export CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE=/etc/ssl/cert.pem` applies to that shell and its children. Include required enterprise CAs. Batch isolates saved gcloud configuration but inherits this environment variable. |
+| .NET native trust on macOS | PEM repair does not modify Keychain trust. Update macOS and .NET and retest; remaining exposure needs separate native-trust remediation. Sharing trust anchors with Safari does not guarantee the same validation policy. |
+| Container trust | Update and rebuild the actual workload image. Host repair cannot fix the intentionally historical `docker/git` fixture. |
+
+The details identify **likely trust paths**, not detected CA configuration or
+package-manager ownership. Acceptance is observed; its exact cause needs
+tool-specific investigation. Sources: [gcloud custom CA configuration](https://docs.cloud.google.com/sdk/docs/proxy-settings),
+[.NET Apple chain validation](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Security.Cryptography/src/System/Security/Cryptography/X509Certificates/ChainPal.Apple.cs).
+
 ### Git HTTPS transport pinning
 
 Git can use `url.*.insteadOf` configuration to silently rewrite an explicit HTTPS remote to SSH. That would bypass a TLS test and previously produced an inconclusive result. For wrapped Git commands, emBarrass now transparently makes an implicit HTTPS port explicit (`:443`) and adds an exact, invocation-local identity rule. This keeps the command on HTTPS without disabling or replacing any Git CA, verification, proxy, credential, or other configuration. Explicit SSH URLs remain unchanged.
