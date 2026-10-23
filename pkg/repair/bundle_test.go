@@ -4,6 +4,7 @@
 package repair
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -34,7 +35,9 @@ func affectedRoot(t *testing.T, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile("testdata/" + name + ".pem")
 	require.NoError(t, err)
-	return data
+	// Tests choose their input line endings explicitly, independently of Git's
+	// checkout conversion (notably core.autocrlf on Windows).
+	return bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
 }
 
 func fixtureBundle(t *testing.T) []byte {
@@ -47,24 +50,37 @@ func fixtureBundle(t *testing.T) []byte {
 
 func TestInspectRemovesExactCertificatesPreservingOtherBytes(t *testing.T) {
 	t.Parallel()
-	trusted := ordinaryRoot(t, "Enterprise test root")
-	before := "### metadata\r\n"
-	between := "\r\n# not a trust anchor\n"
-	after := "\n# end of bundle\n"
-	data := append([]byte(before), trusted...)
-	data = append(data, []byte(between)...)
-	data = append(data, affectedRoot(t, "aaa")...)
-	data = append(data, affectedRoot(t, "emsign")...)
-	data = append(data, []byte(after)...)
-	plan, err := inspect(data)
-	require.NoError(t, err)
-	require.Len(t, plan.Removed, 2)
-	require.Equal(t, 3, plan.Certificates)
-	require.Equal(t, before+string(trusted)+between+"\n\n"+after, string(plan.replacement))
-	again, err := inspect(plan.replacement)
-	require.NoError(t, err)
-	require.Empty(t, again.Removed)
-	require.Equal(t, again.original, again.replacement)
+	for _, test := range []struct {
+		name, trustedEOL, aaaEOL, emsignEOL string
+	}{
+		{"LF", "\n", "\n", "\n"},
+		{"CRLF", "\r\n", "\r\n", "\r\n"},
+		{"mixed", "\r\n", "\n", "\r\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			trusted := bytes.ReplaceAll(ordinaryRoot(t, "Enterprise test root"), []byte("\n"), []byte(test.trustedEOL))
+			aaa := bytes.ReplaceAll(affectedRoot(t, "aaa"), []byte("\n"), []byte(test.aaaEOL))
+			emsign := bytes.ReplaceAll(affectedRoot(t, "emsign"), []byte("\n"), []byte(test.emsignEOL))
+			before := "### metadata\r\n"
+			between := "\r\n# not a trust anchor\n"
+			after := "\n# end of bundle\n"
+			data := append([]byte(before), trusted...)
+			data = append(data, []byte(between)...)
+			data = append(data, aaa...)
+			data = append(data, emsign...)
+			data = append(data, []byte(after)...)
+			plan, err := inspect(data)
+			require.NoError(t, err)
+			require.Len(t, plan.Removed, 2)
+			require.Equal(t, 3, plan.Certificates)
+			require.Equal(t, before+string(trusted)+between+test.aaaEOL+test.emsignEOL+after, string(plan.replacement))
+			again, err := inspect(plan.replacement)
+			require.NoError(t, err)
+			require.Empty(t, again.Removed)
+			require.Equal(t, again.original, again.replacement)
+		})
+	}
 }
 
 func TestInspectRejectsMalformedAndAmbiguousBundles(t *testing.T) {
@@ -94,15 +110,21 @@ func TestInspectRemovesDuplicateAffectedCertificates(t *testing.T) {
 
 func TestLegacyNegativeSerialRootIsPreservedExactly(t *testing.T) {
 	t.Parallel()
-	legacy := affectedRoot(t, "legacy-negative-serial")
-	data := append(append([]byte{}, legacy...), affectedRoot(t, "aaa")...)
-	plan, err := inspect(data)
-	require.NoError(t, err)
-	require.Len(t, plan.Removed, 1)
-	require.Equal(t, string(legacy)+"\n", string(plan.replacement))
-	block, _ := pem.Decode(legacy)
-	before := append([]byte{}, block.Bytes...)
-	_, err = parseBundleCertificate(block.Bytes)
-	require.NoError(t, err)
-	require.Equal(t, before, block.Bytes, "compatibility validation must never mutate input DER")
+	for name, eol := range map[string]string{"LF": "\n", "CRLF": "\r\n"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			legacy := bytes.ReplaceAll(affectedRoot(t, "legacy-negative-serial"), []byte("\n"), []byte(eol))
+			aaa := bytes.ReplaceAll(affectedRoot(t, "aaa"), []byte("\n"), []byte(eol))
+			data := append(append([]byte{}, legacy...), aaa...)
+			plan, err := inspect(data)
+			require.NoError(t, err)
+			require.Len(t, plan.Removed, 1)
+			require.Equal(t, string(legacy)+eol, string(plan.replacement))
+			block, _ := pem.Decode(legacy)
+			before := append([]byte{}, block.Bytes...)
+			_, err = parseBundleCertificate(block.Bytes)
+			require.NoError(t, err)
+			require.Equal(t, before, block.Bytes, "compatibility validation must never mutate input DER")
+		})
+	}
 }
